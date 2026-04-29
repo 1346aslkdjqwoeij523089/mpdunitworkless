@@ -1,0 +1,20 @@
+{
+  "name": "mpd-server-manager",
+  "version": "1.0.0",
+  "description": "MPD Discord Server Manager Bot",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.16.4",
+    "@discordjs/builders": "^1.9.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.7"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
