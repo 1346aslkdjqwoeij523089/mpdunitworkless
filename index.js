@@ -3,7 +3,6 @@ const fs = require('fs').promises;
 const path = require('path');
 
 const TOKEN = process.env.DISCORD_TOKEN;
-const CLIENT_ID = client.user ? client.user.id : process.env.CLIENT_ID; // Set CLIENT_ID env if needed
 const LOG_CHANNEL_ID = '1498899829844082798';
 const BOD_ROLE_IDS = ['1478060223200493750', '1497249386919628840', '1478062056543359037', '1497570951465009235'];
 const DATA_DIR = './data';
@@ -22,9 +21,7 @@ const client = new Client({
 async function ensureDataDir() {
   try {
     await fs.mkdir(DATA_DIR, { recursive: true });
-  } catch (err) {
-    // ok
-  }
+  } catch {}
 }
 
 async function loadModlogs() {
@@ -68,154 +65,149 @@ async function addModlog(guild, type, targetId, modId, reason = 'No reason', dur
   await saveModlogs();
 
   const logChannel = guild.channels.cache.get(LOG_CHANNEL_ID);
-  if (!logChannel) return;
+  if (!logChannel) return console.log('Log channel missing');
 
   const embed = new EmbedBuilder()
-    .setTitle(`${type.toUpperCase()} Log`)
+    .setTitle(`${type.toUpperCase()} | MPD Log`)
     .setColor(type === 'warn' ? 0xFFFF00 : type === 'mute' ? 0xFFA500 : 0xFF0000)
     .addFields(
-      { name: 'Moderator', value: `<@${modId}>`, inline: true },
+      { name: 'Mod', value: `<@${modId}>`, inline: true },
       { name: 'Target', value: `<@${targetId}>`, inline: true },
-      { name: 'Action', value: type.charAt(0).toUpperCase() + type.slice(1), inline: true },
-      { name: 'Reason', value: reason, inline: false },
+      { name: 'Reason', value: reason },
       { name: 'Duration', value: duration ? `${Math.round(duration / 60000)}m` : 'N/A', inline: true },
-      { name: 'Time', value: new Date().toLocaleString(), inline: true },
+      { name: 'Time', value: `<t:${Math.floor(Date.now()/1000)}:F>`, inline: true },
     )
     .setTimestamp()
-    .setFooter({ text: `Entry ID: ${modlogs[targetId].length}` });
+    .setFooter({ text: `Records: ${modlogs[targetId].length}` });
 
   logChannel.send({ embeds: [embed] }).catch(console.error);
 }
 
 const commands = [
-  new SlashCommandBuilder()
-    .setName('warn')
-    .setDescription('Warn a user')
-    .addUserOption(new SlashCommandUserOption().setName('user').setDescription('User to warn').setRequired(true))
-    .addStringOption(new SlashCommandStringOption().setName('reason').setDescription('Reason for warn')),
-  new SlashCommandBuilder()
-    .setName('mute')
-    .setDescription('Mute a user')
-    .addUserOption(new SlashCommandUserOption().setName('user').setDescription('User to mute').setRequired(true))
-    .addStringOption(new SlashCommandStringOption().setName('duration').setDescription('Duration e.g. 10m, 1h, 1d').setRequired(true))
+  new SlashCommandBuilder().setName('warn').setDescription('Warn user')
+    .addUserOption(new SlashCommandUserOption().setName('user').setDescription('Target').setRequired(true))
     .addStringOption(new SlashCommandStringOption().setName('reason').setDescription('Reason')),
-  new SlashCommandBuilder()
-    .setName('ban')
-    .setDescription('Ban a user')
-    .addUserOption(new SlashCommandUserOption().setName('user').setDescription('User to ban').setRequired(true))
+  new SlashCommandBuilder().setName('mute').setDescription('Timeout user')
+    .addUserOption(new SlashCommandUserOption().setName('user').setDescription('Target').setRequired(true))
+    .addStringOption(new SlashCommandStringOption().setName('duration').setDescription('10m 1h 1d').setRequired(true))
     .addStringOption(new SlashCommandStringOption().setName('reason').setDescription('Reason')),
-  new SlashCommandBuilder()
-    .setName('modlogs')
-    .setDescription('View modlogs for a user')
-    .addUserOption(new SlashCommandUserOption().setName('user').setDescription('User (optional, defaults to you)')),
-  new SlashCommandBuilder()
-    .setName('say')
-    .setDescription('Say a message as bot')
-    .addStringOption(new SlashCommandStringOption().setName('content').setDescription('Message').setRequired(true)),
-].map(command => command.toJSON());
+  new SlashCommandBuilder().setName('ban').setDescription('Ban user')
+    .addUserOption(new SlashCommandUserOption().setName('user').setDescription('Target').setRequired(true))
+    .addStringOption(new SlashCommandStringOption().setName('reason').setDescription('Reason')),
+  new SlashCommandBuilder().setName('modlogs').setDescription('View logs')
+    .addUserOption(new SlashCommandUserOption().setName('user').setDescription('Target, optional self')),
+  new SlashCommandBuilder().setName('say').setDescription('Bot says msg')
+    .addStringOption(new SlashCommandStringOption().setName('content').setDescription('Text').setRequired(true)),
+].map(c => c.toJSON());
 
 client.once('ready', async () => {
   await loadModlogs();
+  console.log('Loading slash...');
 
   const rest = new REST({ version: '10' }).setToken(TOKEN);
   try {
-    console.log('Started refreshing slash cmds.');
-    await rest.put(
-      Routes.applicationCommands(client.user.id),
-      { body: commands },
-    );
-    console.log('Slash cmds registered globally (1h propagation).');
+    if (process.env.GUILD_ID) {
+      await rest.put(Routes.applicationGuildCommands(client.user.id, process.env.GUILD_ID), { body: commands });
+      console.log('Guild cmds registered.');
+    } else {
+      await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
+      console.log('Global cmds (1h).');
+    }
   } catch (err) {
-    console.error(err);
+    console.error('Cmd reg fail:', err);
   }
 
-  client.user.setPresence({
-    activities: [{ name: 'Metropolitan Police Department', type: 3 }], // Watching
-    status: 'online',
-  });
-  console.log(`Logged as ${client.user.tag}`);
+  await client.user.setPresence({ activities: [{ name: 'Metropolitan Police Department', type: 3 }], status: 'online' });
+  console.log(`${client.user.tag} ready!`);
 });
 
 client.on('interactionCreate', async (interaction) => {
-  if (!interaction.isChatInputCommand()) return;
+  if (!interaction.isChatInputCommand() || !interaction.guild) {
+    return interaction instanceof Object ? interaction.reply({ content: 'Guild cmd only.', ephemeral: true }) : null;
+  }
 
   const member = interaction.member;
-  if (!BOD_ROLE_IDS.some(id => member.roles.cache.has(id))) {
-    return interaction.reply({ content: '❌ Not authorized (need BoD+ role).', ephemeral: true });
+  console.log(`Auth check for ${interaction.user.tag}: roles ${member.roles.cache.map(r => r.id).join(',')}`);
+
+  if (!BOD_ROLE_IDS.some(roleId => member.roles.cache.has(roleId))) {
+    const userRoles = member.roles.cache.map(r => `<@&${r.id}> (${r.name})`).slice(0, 10).join(', ') || 'none';
+    return interaction.reply({
+      content: `❌ Unauthorized.\nYour roles: ${userRoles}\nNeed one of: ${BOD_ROLE_IDS.map(id => `<@&${id}>`).join(', ')}`,
+      ephemeral: true
+    });
   }
 
   const modId = interaction.user.id;
   await interaction.deferReply({ ephemeral: true });
 
-  const command = interaction.commandName;
-  let targetId, target;
+  try {
+    const command = interaction.commandName;
+    let targetId, targetMember;
 
-  switch (command) {
-    case 'warn':
-      target = interaction.options.getUser('user');
-      targetId = target.id;
-      if (targetId === modId) return interaction.editReply('Cannot warn self.');
-      target = await interaction.guild.members.fetch(targetId).catch(() => null);
-      if (!target) return interaction.editReply('Invalid user.');
-      const wReason = interaction.options.getString('reason') || 'No reason';
-      await addModlog(interaction.guild, 'warn', targetId, modId, wReason);
-      interaction.editReply(`✅ Warned ${target}`);
-      break;
-    case 'mute':
-      target = interaction.options.getUser('user');
-      targetId = target.id;
-      if (targetId === modId) return interaction.editReply('Cannot mute self.');
-      const durStr = interaction.options.getString('duration');
-      const durMs = parseDuration(durStr);
-      if (!durMs) return interaction.editReply('Invalid duration: use 10m, 1h, 1d.');
-      const mReason = interaction.options.getString('reason') || `Muted for ${durStr}`;
-      target = await interaction.guild.members.fetch(targetId).catch(() => null);
-      if (!target) return interaction.editReply('Invalid user.');
-      if (target.permissions.has(PermissionsBitField.Flags.Administrator)) return interaction.editReply('Cannot mute admins.');
-      await target.timeout(durMs, mReason);
-      await addModlog(interaction.guild, 'mute', targetId, modId, mReason, durMs);
-      interaction.editReply(`✅ Muted ${target} for ~${Math.round(durMs/60000)}min`);
-      break;
-    case 'ban':
-      target = interaction.options.getUser('user');
-      targetId = target.id;
-      if (targetId === modId) return interaction.editReply('Cannot ban self.');
-      const bReason = interaction.options.getString('reason') || 'No reason';
-      target = await interaction.guild.members.fetch(targetId).catch(() => null);
-      if (!target) return interaction.editReply('Invalid user.');
-      await interaction.guild.members.ban(targetId, { reason: bReason });
-      await addModlog(interaction.guild, 'ban', targetId, modId, bReason);
-      interaction.editReply(`✅ Banned ${target}`);
-      break;
-    case 'modlogs':
-      const logsUser = interaction.options.getUser('user') || interaction.user;
-      const logsId = logsUser.id;
-      const history = modlogs[logsId] || [];
-      const embed = new EmbedBuilder()
-        .setTitle(`📋 Modlogs: ${logsUser.username}`)
-        .setColor(0x0099FF)
-        .setDescription(history.length ? 
-          history.slice(-10).reverse().map(l => 
-            `**${new Date(l.timestamp).toLocaleString()}** \`${l.type.toUpperCase()}\` by <@${l.modId}> \`${l.reason}\`${l.duration ? ` (**${Math.round(l.duration/60000)}m**)` : ''}`
-          ).join('\n') : 
-          'No modlogs found.'
-        );
-      interaction.editReply({ embeds: [embed], ephemeral: true });
-      break;
-    case 'say':
-      const content = interaction.options.getString('content');
-      await interaction.deleteReply();
-      await interaction.channel.send(content);
-      break;
-    default:
-      interaction.editReply('Unknown command.');
+    switch (command) {
+      case 'warn':
+        targetId = interaction.options.getUser('user').id;
+        if (targetId === modId) return interaction.editReply('No self-warn.');
+        targetMember = interaction.guild.members.cache.get(targetId) || await interaction.guild.members.fetch(targetId).catch(() => null);
+        if (!targetMember) return interaction.editReply('Invalid target.');
+        const wReason = interaction.options.getString('reason') || 'No reason';
+        await addModlog(interaction.guild, 'warn', targetId, modId, wReason);
+        interaction.editReply(`✅ Warned <@${targetId}> (${targetMember.displayName})`);
+        break;
+      case 'mute':
+        targetId = interaction.options.getUser('user').id;
+        if (targetId === modId) return interaction.editReply('No self-mute.');
+        const durStr = interaction.options.getString('duration');
+        const durMs = parseDuration(durStr);
+        if (!durMs) return interaction.editReply('Duration: e.g. `10m`, `1h`, `1d`. Max 28d.');
+        const mReason = interaction.options.getString('reason') || `Timeout ${durStr}`;
+        targetMember = interaction.guild.members.cache.get(targetId) || await interaction.guild.members.fetch(targetId).catch(() => null);
+        if (!targetMember) return interaction.editReply('Invalid target.');
+        if (targetMember.permissions.has(PermissionsBitField.Flags.Administrator)) return interaction.editReply('Cannot mute admins.');
+        await targetMember.timeout(durMs > 2419200000 ? 2419200000 : durMs, mReason); // Max 28d
+        await addModlog(interaction.guild, 'mute', targetId, modId, mReason, durMs);
+        interaction.editReply(`✅ Muted <@${targetId}> for ${Math.round(durMs/60000)}min`);
+        break;
+      case 'ban':
+        targetId = interaction.options.getUser('user').id;
+        if (targetId === modId) return interaction.editReply('No self-ban.');
+        const bReason = interaction.options.getString('reason') || 'No reason';
+        targetMember = interaction.guild.members.cache.get(targetId) || await interaction.guild.members.fetch(targetId).catch(() => null);
+        if (!targetMember) return interaction.editReply('Invalid target.');
+        await interaction.guild.members.ban(targetId, { reason: bReason });
+        await addModlog(interaction.guild, 'ban', targetId, modId, bReason);
+        interaction.editReply(`✅ Banned <@${targetId}> (${targetMember.displayName})`);
+        break;
+      case 'modlogs':
+        const logUser = interaction.options.getUser('user') || interaction.user;
+        const logId = logUser.id;
+        const history = (modlogs[logId] || []).slice(-15);
+        const desc = history.length ? 
+          history.reverse().map((l, i) => 
+            `**<t:${Math.floor(new Date(l.timestamp).getTime()/1000)}:R>** \`${l.type.toUpperCase()}\` <@${l.modId}> | ${l.reason}${l.duration ? ` | ${Math.round(l.duration/60000)}m` : ''}`
+          ).join('\\n') :
+          '*Clean record.*';
+        const embed = new EmbedBuilder()
+          .setTitle(`Modlogs • ${logUser.tag}`)
+          .setThumbnail(logUser.displayAvatarURL())
+          .setColor('#00b0ff')
+          .setDescription(desc)
+          .setFooter({ text: `${history.length} entries` });
+        interaction.editReply({ embeds: [embed] });
+        break;
+      case 'say':
+        const contentSay = interaction.options.getString('content');
+        await interaction.deleteReply();
+        await interaction.channel.send(contentSay).catch(() => interaction.followUp({ content: 'Say failed (perms?).', ephemeral: true }));
+        break;
+    }
+  } catch (err) {
+    console.error(err);
+    await interaction.editReply(`Error: \`${err.message}\``).catch(() => {});
   }
 });
 
-process.on('SIGINT', async () => {
-  await saveModlogs();
-  process.exit(0);
-});
+process.on('SIGINT', async () => await saveModlogs(), process.exit(0) );
 
-client.login(TOKEN);
+client.login(TOKEN).catch(console.error);
 
